@@ -1,5 +1,5 @@
 """
-BUOC 2: Tinh depth map (ban do do sau) real-time tu 2 camera.
+BUOC 2: Tinh depth map (ban do do sau) real-time tu 2 camera tren Pi 5.
 
 Neu ban CHUA calibrate: script se chay o che do demo, dung StereoSGBM
 truc tiep tren anh tho (khong rectify). Ket qua se KHONG chinh xac ve
@@ -19,8 +19,9 @@ Cac phim tat khi dang chay:
 import cv2
 import numpy as np
 import os
+import sys
+from picamera2 import Picamera2
 
-CAMERA_INDEX = 0
 CALIB_FILE = "stereo_calib.npz"
 
 
@@ -55,13 +56,22 @@ def create_stereo_matcher():
 
 
 def main():
-    cap = cv2.VideoCapture(CAMERA_INDEX)
-    if not cap.isOpened():
-        print(f"Khong mo duoc camera index {CAMERA_INDEX}.")
-        return
-
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+    print("[+] Dang khoi tao ket noi Camera doi bang Picamera2 tren Pi 5...")
+    try:
+        picam0 = Picamera2(camera_num=0)
+        picam1 = Picamera2(camera_num=1)
+        
+        config0 = picam0.create_preview_configuration(main={"size": (640, 480), "format": "RGB888"})
+        config1 = picam1.create_preview_configuration(main={"size": (640, 480), "format": "RGB888"})
+        
+        picam0.configure(config0)
+        picam1.configure(config1)
+        
+        picam0.start()
+        picam1.start()
+    except Exception as e:
+        print(f"[-] Loi mo camera phan cung tren Pi 5: {e}")
+        sys.exit(1)
 
     calib = load_calibration(CALIB_FILE)
     if calib:
@@ -73,15 +83,15 @@ def main():
     stereo, min_disp, num_disp = create_stereo_matcher()
 
     while True:
-        ret, frame = cap.read()
-        if not ret:
-            print("Khong doc duoc frame.")
+        try:
+            left_rgb = picam0.capture_array()
+            right_rgb = picam1.capture_array()
+        except Exception as e:
+            print("Khong doc duoc frame:", e)
             break
 
-        h, w = frame.shape[:2]
-        mid = w // 2
-        left = frame[:, :mid]
-        right = frame[:, mid:]
+        left = cv2.cvtColor(left_rgb, cv2.COLOR_RGB2BGR)
+        right = cv2.cvtColor(right_rgb, cv2.COLOR_RGB2BGR)
 
         if calib:
             left = cv2.remap(left, calib["map1x"], calib["map1y"], cv2.INTER_LINEAR)
@@ -107,7 +117,8 @@ def main():
             cv2.imwrite("disparity_saved.png", disp_color)
             print("Da luu disparity_saved.png")
 
-    cap.release()
+    picam0.stop()
+    picam1.stop()
     cv2.destroyAllWindows()
 
 
