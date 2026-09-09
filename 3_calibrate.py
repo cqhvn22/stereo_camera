@@ -14,24 +14,40 @@ Cach dung:
     - Nhan 'c' de bat dau tinh calibration sau khi da chup du.
     - Nhan 'q' de thoat.
 
-Ket qua: file stereo_calib.npz duoc luu, dung truc tiep cho 2_depth_realtime.py
+Ket qua: file stereo_calib.npz duoc luu, dung truc tiep cho code tinh depth sau nay.
 """
 
 import cv2
 import numpy as np
+import os
+import sys
+from picamera2 import Picamera2
 
-CAMERA_INDEX = 0
-CHECKERBOARD = (9, 6)      # so o vuong BEN TRONG theo (cols, rows)
-SQUARE_SIZE_MM = 25.0      # kich thuoc that cua 1 o vuong, do lai va sua so nay
-
+CHECKERBOARD = (8, 6)      # so o vuong BEN TRONG (ban co 9x7 o vuong thi so goc trong la 8x6)
+SQUARE_SIZE_MM = 25.0      # kich thuoc that cua 1 o vuong (mm), do lai va sua so nay
 
 def main():
-    cap = cv2.VideoCapture(CAMERA_INDEX)
-    if not cap.isOpened():
-        print(f"Khong mo duoc camera index {CAMERA_INDEX}.")
-        return
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+    # Tao thu muc tam luu anh chup neu chua co
+    if not os.path.exists("calib_images"):
+        os.makedirs("calib_images")
+
+    print("[+] Dang khoi tao ket noi Camera doi bang Picamera2 tren Pi 5...")
+    try:
+        picam0 = Picamera2(camera_num=0) # Mat camera cong so 0
+        picam1 = Picamera2(camera_num=1) # Mat camera cong so 1
+        
+        # Thiet lap do phan giai co dinh 640x480 de toi uu toc do realtime
+        config0 = picam0.create_preview_configuration(main={"size": (640, 480), "format": "RGB888"})
+        config1 = picam1.create_preview_configuration(main={"size": (640, 480), "format": "RGB888"})
+        
+        picam0.configure(config0)
+        picam1.configure(config1)
+        
+        picam0.start()
+        picam1.start()
+    except Exception as e:
+        print(f"[-] Loi mo camera phan cung tren Pi 5: {e}")
+        sys.exit(1)
 
     objp = np.zeros((CHECKERBOARD[0] * CHECKERBOARD[1], 3), np.float32)
     objp[:, :2] = np.mgrid[0:CHECKERBOARD[0], 0:CHECKERBOARD[1]].T.reshape(-1, 2)
@@ -44,19 +60,25 @@ def main():
     img_shape = None
     captured = 0
 
-    print("Dua ban co vao khung hinh. SPACE=chup, c=tinh calibration, q=thoat.")
+    print("\n=== HUONG DAN CHAY HIEU CHUAN ===")
+    print("1. Gio ban co vao khung hinh o cac goc do va khoang cach khac nhau.")
+    print("   Nhan SPACE de chup, c de tinh calibration, q de thoat.\n")
 
     while True:
-        ret, frame = cap.read()
-        if not ret:
-            print("Khong doc duoc frame.")
+        try:
+            # chup anh tu 2 camera 
+            left_rgb = picam0.capture_array()
+            right_rgb = picam1.capture_array()
+        except Exception as e:
+            print("Khong doc duoc frame:", e)
             break
 
-        h, w = frame.shape[:2]
-        mid = w // 2
-        left = frame[:, :mid]
-        right = frame[:, mid:]
-        img_shape = left.shape[:2][::-1]  # (width, height)
+        # Chuyen tu RGB cua picamera sang BGR cho OpenCV xu ly hien thi
+        left = cv2.cvtColor(left_rgb, cv2.COLOR_RGB2BGR)
+        right = cv2.cvtColor(right_rgb, cv2.COLOR_RGB2BGR)
+
+        h, w = left.shape[:2]
+        img_shape = (w, h)  # (width, height)
 
         left_gray = cv2.cvtColor(left, cv2.COLOR_BGR2GRAY)
         right_gray = cv2.cvtColor(right, cv2.COLOR_BGR2GRAY)
@@ -66,9 +88,9 @@ def main():
 
         display = np.hstack([left, right]).copy()
         if found_l:
-            cv2.drawChessboardCorners(display[:, :mid], CHECKERBOARD, corners_l, found_l)
+            cv2.drawChessboardCorners(display[:, :w], CHECKERBOARD, corners_l, found_l)
         if found_r:
-            cv2.drawChessboardCorners(display[:, mid:], CHECKERBOARD, corners_r, found_r)
+            cv2.drawChessboardCorners(display[:, w:], CHECKERBOARD, corners_r, found_r)
 
         cv2.putText(display, f"Da chup: {captured} cap", (20, 40),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
@@ -85,6 +107,10 @@ def main():
                 objpoints.append(objp)
                 imgpoints_left.append(corners_l)
                 imgpoints_right.append(corners_r)
+                
+                cv2.imwrite(f"calib_images/left_{captured}.jpg", left)
+                cv2.imwrite(f"calib_images/right_{captured}.jpg", right)
+                
                 captured += 1
                 print(f"Da chup cap thu {captured}")
             else:
@@ -102,7 +128,8 @@ def main():
             print("Thoat khong luu.")
             break
 
-    cap.release()
+    picam0.stop()
+    picam1.stop()
     cv2.destroyAllWindows()
 
 
@@ -135,7 +162,7 @@ def calibrate_and_save(objpoints, imgpoints_left, imgpoints_right, img_shape):
              map2x=map2x, map2y=map2y,
              Q=Q, K1=K1, D1=D1, K2=K2, D2=D2, R=R, T=T)
 
-    print("Da luu stereo_calib.npz thanh cong! Gio co the chay 2_depth_realtime.py")
+    print("Da luu stereo_calib.npz thanh cong!")
 
 
 if __name__ == "__main__":
